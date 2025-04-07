@@ -1,13 +1,16 @@
-# app.py - Main application file
 import os
+from dotenv import load_dotenv
 import streamlit as st
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import AzureOpenAIEmbeddings
+from langchain.chains import RetrievalQA
+from langchain_openai import AzureChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain.chains import create_retrieval_chain
-from langchain_community.llms import OpenAI
 from langchain_core.prompts import PromptTemplate
+from langchain.document_loaders import PyPDFLoader, DirectoryLoader, TextLoader, Docx2txtLoader
+from langchain.document_loaders import UnstructuredFileLoader
+from langchain_community.document_loaders import WebBaseLoader
 import logging
 
 # Setup logging
@@ -15,16 +18,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# Initialize environment
-os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+#load env
+load_dotenv()
 
 @st.cache_resource
-def load_and_process_documents(docs_dir="D:\\Downloads\\Assignment_RAG\\documents"):
+def load_and_process_documents(docs_dir=os.environ.get("DOCUMENT_PATH")):
     """Load and process documents from multiple file formats (PDF, DOCX, TXT) in the specified directory"""
     logger.info(f"Loading documents from {docs_dir}")
-    
-    from langchain.document_loaders import PyPDFLoader, DirectoryLoader, TextLoader, Docx2txtLoader
-    from langchain.document_loaders import UnstructuredFileLoader
     
     # Initialize empty list to store all documents
     all_documents = []
@@ -46,6 +46,20 @@ def load_and_process_documents(docs_dir="D:\\Downloads\\Assignment_RAG\\document
         logger.info(f"Loaded {len(docx_documents)} DOCX documents")
     except Exception as e:
         logger.warning(f"Error loading DOCX documents: {e}")
+        
+    website_urls = os.environ.get("WEBSITE_URLS","")
+        
+    if website_urls != "":
+        try:            
+            if isinstance(website_urls, str):
+                website_urls = [website_urls]
+                
+            web_loader = WebBaseLoader(website_urls)
+            web_documents = web_loader.load()
+            all_documents.extend(web_documents)
+            logger.info(f"Loaded {len(web_documents)} web pages")
+        except Exception as e:
+            logger.warning(f"Error loading web content: {e}")
     
     # Load text documents
     try:
@@ -83,8 +97,8 @@ def load_and_process_documents(docs_dir="D:\\Downloads\\Assignment_RAG\\document
     logger.info(f"Split into {len(chunks)} chunks")
     
     # Create embeddings and vector store
-    embeddings = OpenAIEmbeddings(
-        api_key=""
+    embeddings = AzureOpenAIEmbeddings(
+        model=os.environ.get("EMBEDDING_MODEL")
     )
 
     vectorstore = FAISS.from_documents(chunks, embeddings)
@@ -119,8 +133,13 @@ def create_qa_chain(vectorstore):
         input_variables=["context", "question"]
     )
     
-    chain = create_retrieval_chain(
-        llm=OpenAI(temperature=0),
+    chain = RetrievalQA.from_chain_type(
+        llm=AzureChatOpenAI(
+            model="gpt-4",
+            azure_deployment=os.environ.get("DEPLOYMENT_NAME"),
+            azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT"),
+            api_version=os.environ.get("AZURE_OPENAI_API_VERSION"),
+        ),
         chain_type="stuff",
         retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
         return_source_documents=True,
